@@ -109,8 +109,7 @@ bot.on('text', async (ctx) => {
         ? 'Remove Negative Content'
         : 'Build Positive Reputation';
 
-      const socialList = session.social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('
-');
+      const socialList = session.social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('\n');
 
       const summary = `✅ Thanks, ${session.name}!
 
