@@ -20,19 +20,17 @@ bot.start(async (ctx) => {
   await delay(ctx, 800);
 
   ctx.reply(
-    '👋 Hey there! Welcome to *rep.digital*.
+  `👋 Hey there! Welcome to *rep.digital*.
 
-We specialize in removing negative content and building powerful online reputations. What would you like help with today?',
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback('❌ Remove Negative Content', 'remove'),
-        Markup.button.callback('🌟 Build Positive Reputation', 'build')
-      ],
-      [
-        Markup.button.callback('✅ Both', 'both')
-      ]
-    ])
-  );
+We specialize in removing negative content and building powerful online reputations. What would you like help with today?`,
+  Markup.inlineKeyboard([
+    [
+      Markup.button.callback('❌ Remove Negative Content', 'remove'),
+      Markup.button.callback('🌟 Build Positive Reputation', 'build')
+    ],
+    [Markup.button.callback('✅ Both', 'both')]
+  ])
+);
 });
 
 bot.action(['remove', 'build', 'both'], async (ctx) => {
