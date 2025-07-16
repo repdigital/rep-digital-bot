@@ -1,4 +1,4 @@
-// index.js (final update with graceful link handling + dual-service selection)
+// index.js (final update with graceful link handling + dual-service selection and consent)
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
@@ -20,17 +20,20 @@ bot.start(async (ctx) => {
   await delay(ctx, 800);
 
   ctx.reply(
-  '👋 Hey there! Welcome to rep.digital.\n\nWe specialize in removing negative content and building powerful online reputations. What would you like help with today?',
-  Markup.inlineKeyboard([
-    [
-      Markup.button.callback('❌ Remove Negative Content', 'remove'),
-      Markup.button.callback('🌟 Build Positive Reputation', 'build')
-    ],
-    [
-      Markup.button.callback('✅ Both', 'both')
-    ]
-  ])
-);
+    '👋 Hey there! Welcome to *rep.digital*.
+
+We specialize in removing negative content and building powerful online reputations. What would you like help with today?',
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback('❌ Remove Negative Content', 'remove'),
+        Markup.button.callback('🌟 Build Positive Reputation', 'build')
+      ],
+      [
+        Markup.button.callback('✅ Both', 'both')
+      ]
+    ])
+  );
+});
 
 bot.action(['remove', 'build', 'both'], async (ctx) => {
   const chatId = ctx.chat.id;
@@ -82,7 +85,6 @@ bot.on('text', async (ctx) => {
       if (!session.social) session.social = [];
       const isValidLink = text.startsWith('http');
       session.social.push({ platform: session.currentSocial, link: text, valid: isValidLink });
-
       session.step = 'more_socials';
       return ctx.reply('Would you like to add another social media link?', Markup.keyboard([['Yes', 'No']]).oneTime().resize());
 
@@ -94,6 +96,11 @@ bot.on('text', async (ctx) => {
         session.step = 'links';
         return ctx.reply('Do you have any website URLs or article links you’d like us to review for de-indexing or removal?');
       }
+
+    case 'links':
+      session.links = text;
+      session.step = 'consent';
+      return ctx.reply('Can we contact you using the information provided (email or phone)? Please reply YES to continue.');
 
     case 'consent':
       if (text.trim().toLowerCase() !== 'yes') {
@@ -112,16 +119,14 @@ bot.on('text', async (ctx) => {
       const socialList = session.social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('\n');
 
       const summary = `✅ Thanks, ${session.name}!
-
-Here’s what we have:
+\nHere’s what we have:
 
 ` +
         `- Service: ${serviceLabel}
 - Company: ${session.company}
 - Email: ${session.email}
 - Phone: ${session.phone}
-- Socials:
-${socialList}
+- Socials:\n${socialList}
 - Website Links: ${session.links}
 
 📅 Book your call here: ${GHL_CALENDAR_LINK}`;
@@ -203,8 +208,7 @@ async function sendToGHL(data) {
     );
 
     const noteBody = `Source: Telegram Bot\nServices: ${services.join(', ')}\nName: ${name}\nCompany: ${company}\nEmail: ${email}\nPhone: ${phone}\n` +
-      `Socials:\n${social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('\n')}\nLinks: ${links}
-Consent: Yes`;
+      `Socials:\n${social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('\n')}\nLinks: ${links}\nConsent: Yes`;
 
     await axios.post(
       `https://rest.gohighlevel.com/v1/contacts/${contactId}/notes`,
@@ -231,7 +235,7 @@ async function logToGoogleSheet(data) {
       services: data.services.join(', '),
       socialLinks: data.social.map(s => `${s.platform}: ${s.link}`).join('; '),
       links: data.links,
-  consent: 'yes',
+      consent: 'yes',
       timestamp: new Date().toISOString(),
     };
 
