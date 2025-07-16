@@ -1,10 +1,11 @@
-// index.js (updated for natural flow, social buttons, and link submissions)
+// index.js (final update with graceful link handling + dual-service selection)
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const GHL_CALENDAR_LINK = process.env.GHL_CALENDAR_LINK;
+
 const userSessions = {};
 
 function delay(ctx, ms) {
@@ -18,22 +19,28 @@ bot.start(async (ctx) => {
   await ctx.replyWithChatAction('typing');
   await delay(ctx, 800);
 
-  await ctx.reply(
-    `Hey there! 👋 Welcome to *rep.digital*.\n\nWe specialize in removing negative content and building powerful online reputations. What would you like help with today?`,
+  ctx.reply(
+    '👋 Hey there! Welcome to rep.digital.\n\nWe specialize in removing negative content and building powerful online reputations. What would you like help with today?',
     Markup.inlineKeyboard([
-      [Markup.button.callback('❌ Remove Negative Content', 'remove')],
-      [Markup.button.callback('🌟 Build Positive Reputation', 'build')],
-    ]),
-    { parse_mode: 'Markdown' }
+      [
+        Markup.button.callback('❌ Remove Negative Content', 'remove'),
+        Markup.button.callback('🌟 Build Positive Reputation', 'build')
+      ],
+      [
+        Markup.button.callback('✅ Both', 'both')
+      ]
+    ])
   );
 });
 
-bot.action(['remove', 'build'], async (ctx) => {
+bot.action(['remove', 'build', 'both'], async (ctx) => {
   const chatId = ctx.chat.id;
-  userSessions[chatId].service = ctx.match.input;
-  userSessions[chatId].step = 'name';
+  userSessions[chatId] = {
+    services: ctx.match.input === 'both' ? ['remove', 'build'] : [ctx.match.input],
+  };
 
-await ctx.editMessageText('Awesome! I can help with that. First things first — what’s your full name?');
+  await ctx.editMessageText("Awesome! I can help with that. First things first — what’s your full name?");
+  userSessions[chatId].step = 'name';
 });
 
 bot.on('text', async (ctx) => {
@@ -47,188 +54,198 @@ bot.on('text', async (ctx) => {
     case 'name':
       session.name = text;
       session.step = 'company';
-      await ctx.replyWithChatAction('typing');
-      await delay(ctx, 700);
-      return ctx.reply(`Nice to meet you, ${text.split(' ')[0]}! 👋 What’s your company name?`);
+      return ctx.reply('What’s your company name?');
 
     case 'company':
       session.company = text;
       session.step = 'email';
-      return ctx.reply('Got it. What’s your email address?');
+      return ctx.reply('Your email address?');
 
     case 'email':
       session.email = text;
       session.step = 'phone';
-      return ctx.reply('And your phone number?');
+      return ctx.reply('Phone number?');
 
     case 'phone':
       session.phone = text;
-      session.step = 'social';
-      return ctx.reply('Which social profile would you like to share?',
-        Markup.inlineKeyboard([
-          [
-            Markup.button.callback('Facebook', 'social_facebook'),
-            Markup.button.callback('Instagram', 'social_instagram')
-          ],
-          [
-            Markup.button.callback('LinkedIn', 'social_linkedin'),
-            Markup.button.callback('Website / Other', 'social_other')
-          ]
-        ])
+      session.step = 'social_prompt';
+      return ctx.reply(
+        'Which social media platform are you sharing a link for?',
+        Markup.keyboard([['Facebook', 'Instagram'], ['LinkedIn', 'Other']]).oneTime().resize()
       );
 
-    case 'website':
-      session.websites = text;
-      session.step = 'confirm';
+    case 'social_prompt':
+      session.currentSocial = text;
+      session.step = 'social_link';
+      return ctx.reply(`Please send the link for ${text}:`);
 
-      const summary = `✅ Here’s what we have:
+    case 'social_link':
+      if (!session.social) session.social = [];
+      const isValidLink = text.startsWith('http');
+      session.social.push({ platform: session.currentSocial, link: text, valid: isValidLink });
 
-- Name: ${session.name}
+      session.step = 'more_socials';
+      return ctx.reply('Would you like to add another social media link?', Markup.keyboard([['Yes', 'No']]).oneTime().resize());
+
+    case 'more_socials':
+      if (text.toLowerCase() === 'yes') {
+        session.step = 'social_prompt';
+        return ctx.reply('Which social media platform?');
+      } else {
+        session.step = 'links';
+        return ctx.reply('Do you have any website URLs or article links you’d like us to review for de-indexing or removal?');
+      }
+
+    case 'consent':
+      if (text.trim().toLowerCase() !== 'yes') {
+        return ctx.reply('We need your consent to contact you. Please reply YES to proceed.');
+      }
+
+      await sendToGHL(session);
+      await logToGoogleSheet(session);
+
+      const serviceLabel = session.services.includes('remove') && session.services.includes('build')
+        ? 'Remove Negative Content + Build Positive Reputation'
+        : session.services.includes('remove')
+        ? 'Remove Negative Content'
+        : 'Build Positive Reputation';
+
+      const socialList = session.social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('
+');
+
+      const summary = `✅ Thanks, ${session.name}!
+
+Here’s what we have:
+
+` +
+        `- Service: ${serviceLabel}
 - Company: ${session.company}
 - Email: ${session.email}
 - Phone: ${session.phone}
-- Social Links: ${session.socialLinks?.join(', ') || 'None'}
-- URLs to Remove: ${session.websites || 'None'}
-- Service: ${session.service === 'remove' ? 'Remove Negative Content' : 'Build Positive Reputation'}
+- Socials:
+${socialList}
+- Website Links: ${session.links}
 
-Would you like to mark this as URGENT? ⚠️`;
+📅 Book your call here: ${GHL_CALENDAR_LINK}`;
 
-      return ctx.reply(summary, Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Submit', 'submit')],
-        [Markup.button.callback('⚠️ Mark as URGENT', 'urgent')]
-      ]));
+      delete userSessions[chatId];
+      return ctx.reply(summary);
 
     default:
-      return ctx.reply('Something went wrong. Please type /start to begin again.');
+      return ctx.reply('Something went wrong. Type /start to begin again.');
   }
-});
-
-bot.action(['social_facebook', 'social_instagram', 'social_linkedin', 'social_other'], async (ctx) => {
-  const chatId = ctx.chat.id;
-  const platform = ctx.match.input.replace('social_', '');
-  userSessions[chatId].currentPlatform = platform;
-  userSessions[chatId].step = 'addSocial';
-  return ctx.reply(`Please send the link to your ${platform === 'other' ? 'website or other profile' : platform} account:`);
-});
-
-bot.on('text', async (ctx) => {
-  const chatId = ctx.chat.id;
-  const session = userSessions[chatId];
-
-  if (session.step === 'addSocial') {
-    if (!session.socialLinks) session.socialLinks = [];
-    session.socialLinks.push(ctx.message.text);
-    session.step = 'addMoreSocial';
-    return ctx.reply('Would you like to add another social profile?',
-      Markup.inlineKeyboard([
-        [
-          Markup.button.callback('Yes', 'add_more_social'),
-          Markup.button.callback('No', 'skip_social')
-        ]
-      ])
-    );
-  }
-});
-
-bot.action('add_more_social', async (ctx) => {
-  userSessions[ctx.chat.id].step = 'social';
-  return ctx.reply('Select another social profile to add:',
-    Markup.inlineKeyboard([
-      [Markup.button.callback('Facebook', 'social_facebook'), Markup.button.callback('Instagram', 'social_instagram')],
-      [Markup.button.callback('LinkedIn', 'social_linkedin'), Markup.button.callback('Website / Other', 'social_other')]
-    ])
-  );
-});
-
-bot.action('skip_social', async (ctx) => {
-  userSessions[ctx.chat.id].step = 'website';
-  return ctx.reply('Please send any specific links (URLs) you’d like us to review or remove.');
-});
-
-bot.action(['submit', 'urgent'], async (ctx) => {
-  const chatId = ctx.chat.id;
-  const session = userSessions[chatId];
-
-  if (ctx.match.input === 'urgent') {
-    session.urgent = true;
-  }
-
-  await ctx.reply('Awesome! We’re logging your details now...');
-
-  await sendToGHL(session);
-
-  delete userSessions[chatId];
-  return ctx.reply(`✅ You're all set! Book a call with our team here:
-${GHL_CALENDAR_LINK}`);
 });
 
 async function sendToGHL(data) {
   try {
-    const { name, email, phone, company, socialLinks, service, websites, urgent } = data;
+    const { name, email, phone, company, social, links, services } = data;
 
     const searchResponse = await axios.get(
       `https://rest.gohighlevel.com/v1/contacts/lookup?email=${encodeURIComponent(email)}`,
-      { headers: { Authorization: `Bearer ${process.env.GHL_API_KEY}` } }
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      }
     );
 
-    const existing = searchResponse.data?.contact;
+    const existingContact = searchResponse.data?.contact;
     let contactId;
 
-    if (existing) {
-      contactId = existing.id;
-      await axios.put(`https://rest.gohighlevel.com/v1/contacts/${contactId}`, {
-        email,
-        phone,
-        firstName: name.split(' ')[0],
-        lastName: name.split(' ')[1] || '',
-        companyName: company,
-      }, {
-        headers: { Authorization: `Bearer ${process.env.GHL_API_KEY}` }
-      });
+    if (existingContact) {
+      contactId = existingContact.id;
+      await axios.put(
+        `https://rest.gohighlevel.com/v1/contacts/${contactId}`,
+        {
+          email,
+          phone,
+          firstName: name.split(' ')[0],
+          lastName: name.split(' ')[1] || '',
+          companyName: company,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
     } else {
-      const createResponse = await axios.post(`https://rest.gohighlevel.com/v1/contacts/`, {
-        locationId: process.env.GHL_LOCATION_ID,
-        email,
-        phone,
-        firstName: name.split(' ')[0],
-        lastName: name.split(' ')[1] || '',
-        companyName: company,
-        source: 'Telegram Bot'
-      }, {
-        headers: { Authorization: `Bearer ${process.env.GHL_API_KEY}` }
-      });
+      const createResponse = await axios.post(
+        `https://rest.gohighlevel.com/v1/contacts/`,
+        {
+          locationId: process.env.GHL_LOCATION_ID,
+          email,
+          phone,
+          firstName: name.split(' ')[0],
+          lastName: name.split(' ')[1] || '',
+          companyName: company,
+          source: 'Telegram Bot',
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
       contactId = createResponse.data.id;
     }
 
-    await axios.post(`https://rest.gohighlevel.com/v1/contacts/${contactId}/tags`, {
-      tags: ['telegram lead']
-    }, {
-      headers: { Authorization: `Bearer ${process.env.GHL_API_KEY}` }
-    });
+    await axios.post(
+      `https://rest.gohighlevel.com/v1/contacts/${contactId}/tags`,
+      { tags: ['telegram lead'] },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
 
-    const note = `Source: Telegram Bot${urgent ? ' (URGENT)' : ''}
-Service: ${service === 'remove' ? 'Remove Negative Content' : 'Build Positive Reputation'}
-Name: ${name}
-Company: ${company}
-Email: ${email}
-Phone: ${phone}
-Socials: ${socialLinks?.join(', ') || 'None'}
-URLs: ${websites || 'None'}`;
+    const noteBody = `Source: Telegram Bot\nServices: ${services.join(', ')}\nName: ${name}\nCompany: ${company}\nEmail: ${email}\nPhone: ${phone}\n` +
+      `Socials:\n${social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('\n')}\nLinks: ${links}
+Consent: Yes`;
 
-    await axios.post(`https://rest.gohighlevel.com/v1/contacts/${contactId}/notes`, {
-      body: note
-    }, {
-      headers: { Authorization: `Bearer ${process.env.GHL_API_KEY}` }
-    });
-
-  } catch (err) {
-    console.error('❌ GHL Sync Error:', err.response?.data || err.message);
+    await axios.post(
+      `https://rest.gohighlevel.com/v1/contacts/${contactId}/notes`,
+      { body: noteBody },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  } catch (error) {
+    console.error('❌ Error syncing with GHL:', error.response?.data || error.message);
   }
 }
-// Trigger redeploy - no code change
+
+async function logToGoogleSheet(data) {
+  try {
+    const payload = {
+      name: data.name,
+      email: data.email,
+      phone: data.phone,
+      company: data.company,
+      services: data.services.join(', '),
+      socialLinks: data.social.map(s => `${s.platform}: ${s.link}`).join('; '),
+      links: data.links,
+  consent: 'yes',
+      timestamp: new Date().toISOString(),
+    };
+
+    // Placeholder: Replace with actual Google Sheets logging logic/API call
+    console.log('📝 Logging to Google Sheets:', payload);
+
+  } catch (err) {
+    console.error('❌ Failed to log to Google Sheets:', err.message);
+  }
+}
 
 bot.launch();
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
