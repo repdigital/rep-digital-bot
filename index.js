@@ -225,8 +225,10 @@ URLs: ${websites || 'None'}`;
     console.error('❌ GHL Sync Error:', err.response?.data || err.message);
   }
 }
+// Trigger redeploy - no code change
 
 bot.launch();
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
