@@ -237,8 +237,9 @@ async function logToGoogleSheet(data) {
       timestamp: new Date().toISOString(),
     };
 
-    // Placeholder: Replace with actual Google Sheets logging logic/API call
-    console.log('📝 Logging to Google Sheets:', payload);
+   await axios.post(process.env.SHEETS_WEBHOOK_URL, payload, {
+  headers: { 'Content-Type': 'application/json' }
+});
 
   } catch (err) {
     console.error('❌ Failed to log to Google Sheets:', err.message);
