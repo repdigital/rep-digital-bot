@@ -206,6 +206,8 @@ async function sendToGHL(data) {
   try {
     const { name, email, phone, company, services } = data;
 
+    console.log("🔍 Looking up contact by email:", email);
+
     const searchResponse = await axios.get(
       `https://rest.gohighlevel.com/v1/contacts/lookup?email=${encodeURIComponent(email)}`,
       {
@@ -230,6 +232,7 @@ async function sendToGHL(data) {
 
     if (existingContact) {
       contactId = existingContact.id;
+      console.log("✅ Contact found. Updating contact ID:", contactId);
       await axios.put(
         `https://rest.gohighlevel.com/v1/contacts/${contactId}`,
         contactPayload,
@@ -241,6 +244,7 @@ async function sendToGHL(data) {
         }
       );
     } else {
+      console.log("🆕 Contact not found. Creating new contact...");
       const createResponse = await axios.post(
         `https://rest.gohighlevel.com/v1/contacts/`,
         { ...contactPayload, locationId: process.env.GHL_LOCATION_ID },
@@ -252,42 +256,29 @@ async function sendToGHL(data) {
         }
       );
       contactId = createResponse.data.id;
+      console.log("✅ Contact created. New contact ID:", contactId);
     }
 
-    await axios.post(
-      `https://rest.gohighlevel.com/v1/contacts/${contactId}/tags`,
-      { tags: ['telegram lead'] },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.GHL_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    // Add this before posting the note
+    console.log("📝 Preparing to create note for contact ID:", contactId);
 
-    let note = `Source: Telegram Bot\nServices: ${services.join(', ')}\nName: ${name}\nCompany: ${company}\nEmail: ${email}\nPhone: ${phone}\n`;
-
-    if (data.social?.length) {
-      note += `Socials:\n${data.social.map(s => `- ${s.platform}: ${s.link}`).join('\n')}\n`;
-    }
-
-    if (data.links) {
-      note += `Links: ${data.links}\n`;
-    }
-
-    if (data.customRequest) {
-      note += `Custom Request: ${data.customRequest}\n`;
-    }
+    let noteBody = `Source: Telegram Bot\nServices: ${services.join(', ')}\nName: ${name}\nCompany: ${company}\nEmail: ${email}\nPhone: ${phone}\n`;
 
     if (services.includes('ads')) {
-      note += `Ad Platforms: ${data.ad_platforms}\nAd Account: ${data.ad_account}\n`;
-      if (data.ad_account_id) note += `Ad Account ID: ${data.ad_account_id}\n`;
-      note += `Ad Budget: ${data.ad_budget}\nCreatives: ${data.ad_creatives}\nGoal: ${data.ad_goal}\n`;
+      noteBody += `Ad Platforms: ${data.ad_platforms}\nAd Account: ${data.ad_account}\n`;
+      if (data.ad_account_id) noteBody += `Ad Account ID: ${data.ad_account_id}\n`;
+      noteBody += `Ad Budget: ${data.ad_budget}\nCreatives: ${data.ad_creatives}\nGoal: ${data.ad_goal}\nLinks: ${data.links}\nConsent: Yes`;
+    } else if (data.social) {
+      noteBody += `Socials:\n${data.social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('\n')}\nLinks: ${data.links}\nConsent: Yes`;
+    } else if (data.customRequest) {
+      noteBody += `Request Details: ${data.customRequest}\nConsent: Yes`;
     }
+
+    console.log("📄 Note body to be sent:\n", noteBody);
 
     await axios.post(
       `https://rest.gohighlevel.com/v1/contacts/${contactId}/notes`,
-      { body: note },
+      { body: noteBody },
       {
         headers: {
           Authorization: `Bearer ${process.env.GHL_API_KEY}`,
@@ -296,8 +287,10 @@ async function sendToGHL(data) {
       }
     );
 
+    console.log("✅ Note successfully added to contact:", contactId);
+
   } catch (error) {
-    console.error('❌ GHL Sync Error:', error.response?.data || error.message);
+    console.error('❌ Error syncing with GHL:', error.response?.data || error.message);
   }
 }
 
