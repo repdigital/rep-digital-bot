@@ -3,256 +3,211 @@ const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-let userState = {};
+const GHL_CALENDAR_LINK = process.env.GHL_CALENDAR_LINK;
 
-bot.start((ctx) => {
-  const firstName = ctx.from.first_name || 'there';
-  userState[ctx.from.id] = { step: 'start' };
+const userSessions = {};
+const socialPlatforms = ['Facebook', 'Instagram', 'LinkedIn', 'Website/Other'];
+
+function delay(ctx, ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+bot.start(async (ctx) => {
+  const chatId = ctx.chat.id;
+  userSessions[chatId] = {};
+
+  await ctx.replyWithChatAction('typing');
+  await delay(ctx, 800);
 
   ctx.reply(
-    `👋 Hey ${firstName}! Welcome to *rep.digital*.\n\n` +
-      `We specialize in removing negative content, building strong reputations, running effective ads, and helping you win online.\n\n` +
-      `👇 Choose a service to get started or type /menu at any time to return here.`,
-    {
-      parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([
-        [
-          Markup.button.callback('❌ Remove Negative Content', 'remove_content'),
-          Markup.button.callback('🌟 Build Positive Reputation', 'build_reputation')
-        ],
-        [
-          Markup.button.callback('📢 Ad Platform / Marketing Services', 'ads_services')
-        ],
-        [
-          Markup.button.callback('✅ Both', 'both'),
-          Markup.button.callback('🎯 Other', 'other')
-        ]
-      ])
-    }
-  );
-});
-
-bot.command('menu', (ctx) => {
-  userState[ctx.from.id] = { step: 'start' };
-  ctx.reply(
-    `🔁 Main Menu\n\nPlease choose a service:`,
+    '👋 Welcome to *rep.digital*! We help with:\n\n' +
+    '❌ Removing negative content\n' +
+    '🌟 Building positive online reputation\n' +
+    '📢 Running paid ads\n' +
+    '✏️ Other custom support\n\n' +
+    'Use the buttons below to get started — or type /menu anytime to switch options.',
     Markup.inlineKeyboard([
-      [
-        Markup.button.callback('❌ Negative Content Removal', 'remove_content'),
-        Markup.button.callback('🌟 Positive Content Generation', 'build_reputation')
-      ],
-      [
-        Markup.button.callback('📢 Ad Platform / Marketing Services', 'ads_services')
-      ],
-      [
-        Markup.button.callback('✅ Both', 'both'),
-        Markup.button.callback('🎯 Other', 'other')
-      ]
+      [Markup.button.callback('❌ Remove Negative Content', 'remove')],
+      [Markup.button.callback('🌟 Build Positive Reputation', 'build')],
+      [Markup.button.callback('✅ Both', 'both')],
+      [Markup.button.callback('📢 Ad Platform Services', 'ads')],
+      [Markup.button.callback('✏️ Other', 'other')]
     ])
   );
 });
-// Handle service selections
-bot.action(['remove_content', 'build_reputation', 'ads_services', 'both', 'other'], async (ctx) => {
-  const chatId = ctx.from.id;
-  const selection = ctx.match.input;
 
-  userState[chatId] = {
-    step: 'name',
-    services: [],
-    data: {},
+bot.action(['remove', 'build', 'both', 'ads', 'other'], async (ctx) => {
+  const chatId = ctx.chat.id;
+  const service = ctx.match.input;
+  userSessions[chatId] = {
+    services: service === 'both' ? ['remove', 'build'] : [service],
+    social: [],
   };
 
-  switch (selection) {
-    case 'remove_content':
-      userState[chatId].services = ['remove'];
-      break;
-    case 'build_reputation':
-      userState[chatId].services = ['build'];
-      break;
-    case 'ads_services':
-      userState[chatId].services = ['ads'];
-      break;
-    case 'both':
-      userState[chatId].services = ['remove', 'build'];
-      break;
-    case 'other':
-      userState[chatId].services = ['other'];
-      userState[chatId].step = 'custom_query';
-      return ctx.reply('✏️ Please describe what you’re looking for so we can tailor our support:');
+  if (service === 'other') {
+    await ctx.editMessageText("Got it — tell us briefly what you’re looking for:");
+    userSessions[chatId].step = 'customQuery';
+  } else {
+    await ctx.editMessageText("Great! First up — what’s your full name?");
+    userSessions[chatId].step = 'name';
   }
-
-  await ctx.reply('👤 What is your full name? This helps us address you properly.');
 });
 
-// Generic message handler
-bot.on('text', async (ctx) => {
-  const chatId = ctx.from.id;
-  const session = userState[chatId];
+bot.hears('/menu', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const session = userSessions[chatId];
 
-  if (!session || !session.step) {
-    return ctx.reply('Please type /start or /menu to begin.');
+  if (session && session.step) {
+    await ctx.reply(
+      '⚠️ You’re mid-process. Start over?',
+      Markup.keyboard([
+        ['✅ Yes, start over'],
+        ['❌ No, continue']
+      ]).oneTime().resize()
+    );
+    session.step = 'confirmRestart';
+  } else {
+    await ctx.reply('Choose a service:', Markup.keyboard([
+      ['❌ Negative Content Removal'],
+      ['🌟 Positive Content Generation'],
+      ['📢 Ad Platform / Marketing Services'],
+      ['✏️ Other']
+    ]).oneTime().resize());
   }
-
+});
+bot.on('text', async (ctx) => {
+  const chatId = ctx.chat.id;
   const text = ctx.message.text.trim();
+  const session = userSessions[chatId];
+
+  if (!session || !session.step) return;
 
   switch (session.step) {
+    case 'confirmRestart':
+      if (text.toLowerCase().includes('yes')) {
+        return bot.start(ctx);
+      } else {
+        await ctx.reply('No problem — continuing from where we left off.');
+        session.step = session.lastStep || 'name';
+        return;
+      }
+
     case 'name':
-      session.data.name = text;
-      session.step = 'company';
-      return ctx.reply('🏢 What is your company name?');
-    case 'company':
-      session.data.company = text;
+      session.name = text;
       session.step = 'email';
-      return ctx.reply('📧 What is your email address?');
+      return ctx.reply('Thanks! What’s your email address?');
 
     case 'email':
-      session.data.email = text;
+      session.email = text;
       session.step = 'phone';
-      return ctx.reply('📞 What is your phone number?');
+      return ctx.reply('Great — what’s your phone number?');
 
     case 'phone':
-      session.data.phone = text;
+      session.phone = text;
+      session.step = 'company';
+      return ctx.reply('Perfect. What’s your company name?');
 
-      if (session.services.includes('ads')) {
-        session.step = 'ad_platforms';
-        return ctx.reply('📢 What platforms are you interested in running ads on?\n_Example: Meta (Facebook/Instagram), Google, TikTok, LinkedIn, YouTube, etc._');
-      }
+    case 'company':
+      session.company = text;
 
       if (session.services.includes('build')) {
-        session.step = 'social';
-        return ctx.reply('🔗 Let’s collect links to your social profiles. What platform would you like to start with?\n(Options: Facebook, Instagram, LinkedIn, Website/Other)');
+        session.step = 'social_platform_select';
+        return ctx.reply(
+          'Let’s collect your social profiles to build your rep. Choose a platform:',
+          Markup.keyboard([
+            ...socialPlatforms.map(p => [p]),
+            ['✅ No more links']
+          ]).oneTime().resize()
+        );
       }
 
-      if (session.services.includes('remove')) {
-        session.step = 'links';
-        return ctx.reply('🔗 Please provide the URLs to any content you’d like removed.');
-      }
-
-      if (session.services.includes('other')) {
-        session.step = 'custom_query';
-        return ctx.reply('✏️ Please describe what you’re looking for.');
-      }
-
-      return ctx.reply('✅ Almost done! Please type /menu to restart or continue.');
-    
-    case 'ad_platforms':
-      session.data.ad_platforms = text;
-      session.step = 'ad_account';
-      return ctx.reply('🧾 Do you already have an ad account or business manager set up? (Yes / No)');
-    
-    case 'ad_account':
-      session.data.ad_account = text;
-      if (text.toLowerCase() === 'yes') {
-        session.step = 'ad_account_id';
-        return ctx.reply('🔢 Please provide the Ad Account ID (if available):');
-      } else {
-        session.step = 'ad_budget';
-        return ctx.reply('💸 What is your monthly ad budget? Even a ballpark is helpful.');
-      }
-
-    case 'ad_account_id':
-      session.data.ad_account_id = text;
-      session.step = 'ad_budget';
-      return ctx.reply('💸 What is your monthly ad budget? Even a ballpark is helpful.');
-    
-    case 'ad_budget':
-      session.data.ad_budget = text;
-      session.step = 'ad_creatives';
-      return ctx.reply('🎨 Do you have any creatives ready (images, videos, ad copy)? (Yes / No)');
-
-    case 'ad_creatives':
-      session.data.ad_creatives = text;
-      session.step = 'ad_goal';
-      return ctx.reply('🎯 What’s your primary goal with ads?\n_Lead generation, sales, brand awareness, etc._');
-    
-    case 'ad_goal':
-      session.data.ad_goal = text;
       session.step = 'links';
-      return ctx.reply('🔗 Any landing pages, sales pages, or current ad links we should review? Drop them here:');
-    case 'links':
-      session.data.links = text;
+      return ctx.reply('Any links we should review? Landing pages, articles, etc.');
+    
+    case 'customQuery':
+      session.customRequest = text;
       session.step = 'consent';
-      return ctx.reply('✅ Got it! One last thing — can we contact you using the info you’ve provided (email/phone)?\nPlease reply YES to continue.');
+      return ctx.reply('Thanks! Can we contact you using the info you provide? Reply YES to proceed.');
 
-    case 'custom_query':
-      session.data.custom_query = text;
+    case 'social_platform_select':
+      if (text === '✅ No more links') {
+        session.step = 'links';
+        return ctx.reply('Got it! Now, any landing pages or review links we should take a look at?');
+      }
+
+      if (socialPlatforms.includes(text)) {
+        session.pendingSocialPlatform = text;
+        session.step = 'social_platform_link';
+        return ctx.reply(`Please provide the URL for your ${text} profile:`);
+      } else {
+        return ctx.reply('Please select one of the buttons or type "✅ No more links" if done.');
+      }
+
+    case 'social_platform_link':
+      if (!session.social) session.social = [];
+      session.social.push({ platform: session.pendingSocialPlatform, link: text, valid: true });
+      session.step = 'social_platform_select';
+      return ctx.reply(
+        'Link received! Add another?',
+        Markup.keyboard([
+          ...socialPlatforms.map(p => [p]),
+          ['✅ No more links']
+        ]).oneTime().resize()
+      );
+    case 'links':
+      session.links = text;
       session.step = 'consent';
-      return ctx.reply('✅ Got it! One last thing — can we contact you using the info you’ve provided (email/phone)?\nPlease reply YES to continue.');
+      return ctx.reply('Can we contact you using the info you’ve provided? Reply YES to continue.');
 
     case 'consent':
-      if (text.trim().toLowerCase() !== 'yes') {
-        return ctx.reply('⚠️ We need your consent to proceed. Please reply YES to continue.');
+      if (text.toLowerCase() !== 'yes') {
+        return ctx.reply('We need your permission to proceed. Please reply YES if you agree.');
       }
 
-      session.data.consent = 'yes';
+      await sendToGHL(session);
+      await logToGoogleSheet(session);
 
-      // Send to GHL
-      await sendToGHL(chatId);
+      const serviceLabel = session.services.includes('ads')
+        ? 'Ad Platform / Marketing Services'
+        : session.services.includes('build')
+        ? 'Positive Reputation'
+        : session.services.includes('remove')
+        ? 'Negative Content Removal'
+        : 'Custom';
 
-      // Log to Google Sheet
-      await logToGoogleSheet(chatId);
+      let summary = `✅ Thanks, ${session.name}!\n\nHere’s what we’ve got:\n`;
+      summary += `- Service: ${serviceLabel}\n`;
+      summary += `- Company: ${session.company}\n`;
+      summary += `- Email: ${session.email}\n`;
+      summary += `- Phone: ${session.phone}\n`;
 
-      const summary = buildSummaryMessage(session);
+      if (session.social) {
+        summary += `- Social Profiles:\n${session.social.map(s => `  • ${s.platform}: ${s.link}`).join('\n')}\n`;
+      }
 
-      await ctx.reply(summary, {
-        parse_mode: 'Markdown',
-        disable_web_page_preview: true,
-      });
+      if (session.links) {
+        summary += `- Links: ${session.links}\n`;
+      }
 
-      await ctx.reply(`📅 Book a call here: ${GHL_CALENDAR_LINK}`);
+      if (session.customRequest) {
+        summary += `- Request: ${session.customRequest}\n`;
+      }
+
+      summary += `\n📅 Ready to chat? Book your call here:\n${GHL_CALENDAR_LINK}`;
 
       delete userSessions[chatId];
-      return;
+      return ctx.reply(summary);
 
     default:
-      return ctx.reply('❌ Something went wrong. Please type /start to begin again.');
+      return ctx.reply('Sorry — I didn’t understand that. You can type /start to begin again.');
   }
 });
-function buildSummaryMessage(session) {
-  const data = session.data;
-  const services = session.services?.join(', ') || 'N/A';
-
-  let summary = `✅ *Submission Summary*\n\n`;
-  summary += `*Name:* ${data.name}\n`;
-  summary += `*Email:* ${data.email}\n`;
-  summary += `*Phone:* ${data.phone}\n`;
-  summary += `*Company:* ${data.company}\n`;
-  summary += `*Service(s):* ${services}\n\n`;
-
-  if (session.services.includes('remove') || session.services.includes('build') || session.services.includes('both')) {
-    if (data.social && data.social.length) {
-      summary += `*Social Media Links:*\n`;
-      data.social.forEach((s) => {
-        summary += `- ${s.platform}: ${s.link} ${s.valid ? '' : '❌ Invalid'}\n`;
-      });
-    }
-    if (data.links) summary += `\n*Additional Links:* ${data.links}\n`;
-  }
-
-  if (session.services.includes('ads')) {
-    summary += `*Ad Platforms:* ${data.ad_platforms || 'N/A'}\n`;
-    summary += `*Ad Account:* ${data.ad_account || 'N/A'}\n`;
-    if (data.ad_account_id) summary += `*Ad Account ID:* ${data.ad_account_id}\n`;
-    summary += `*Budget:* ${data.ad_budget || 'N/A'}\n`;
-    summary += `*Creatives Ready:* ${data.ad_creatives || 'N/A'}\n`;
-    summary += `*Goal:* ${data.ad_goal || 'N/A'}\n`;
-    if (data.links) summary += `\n*Links to Review:* ${data.links}\n`;
-  }
-
-  if (session.services.includes('other')) {
-    summary += `*Custom Query:* ${data.custom_query || 'N/A'}\n`;
-  }
-
-  return summary;
-}
-
-async function sendToGHL(chatId) {
+async function sendToGHL(data) {
   try {
-    const data = userSessions[chatId]?.data;
-    if (!data) return;
+    const { name, email, phone, company, services } = data;
 
     const searchResponse = await axios.get(
-      `https://rest.gohighlevel.com/v1/contacts/lookup?email=${encodeURIComponent(data.email)}`,
+      `https://rest.gohighlevel.com/v1/contacts/lookup?email=${encodeURIComponent(email)}`,
       {
         headers: {
           Authorization: `Bearer ${process.env.GHL_API_KEY}`,
@@ -265,11 +220,11 @@ async function sendToGHL(chatId) {
     let contactId;
 
     const contactPayload = {
-      email: data.email,
-      phone: data.phone,
-      firstName: data.name.split(' ')[0],
-      lastName: data.name.split(' ')[1] || '',
-      companyName: data.company,
+      email,
+      phone,
+      firstName: name.split(' ')[0],
+      lastName: name.split(' ')[1] || '',
+      companyName: company,
       source: 'Telegram Bot'
     };
 
@@ -310,24 +265,25 @@ async function sendToGHL(chatId) {
       }
     );
 
-    let note = `Source: Telegram Bot\nServices: ${userSessions[chatId].services.join(', ')}\nName: ${data.name}\nCompany: ${data.company}\nEmail: ${data.email}\nPhone: ${data.phone}\n`;
+    let note = `Source: Telegram Bot\nServices: ${services.join(', ')}\nName: ${name}\nCompany: ${company}\nEmail: ${email}\nPhone: ${phone}\n`;
 
-    if (data.social) {
-      note += `Socials:\n${data.social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('\n')}\n`;
+    if (data.social?.length) {
+      note += `Socials:\n${data.social.map(s => `- ${s.platform}: ${s.link}`).join('\n')}\n`;
     }
-    if (data.links) note += `Links: ${data.links}\n`;
 
-    if (userSessions[chatId].services.includes('ads')) {
+    if (data.links) {
+      note += `Links: ${data.links}\n`;
+    }
+
+    if (data.customRequest) {
+      note += `Custom Request: ${data.customRequest}\n`;
+    }
+
+    if (services.includes('ads')) {
       note += `Ad Platforms: ${data.ad_platforms}\nAd Account: ${data.ad_account}\n`;
       if (data.ad_account_id) note += `Ad Account ID: ${data.ad_account_id}\n`;
-      note += `Ad Budget: ${data.ad_budget}\nCreatives Ready: ${data.ad_creatives}\nGoal: ${data.ad_goal}\n`;
+      note += `Ad Budget: ${data.ad_budget}\nCreatives: ${data.ad_creatives}\nGoal: ${data.ad_goal}\n`;
     }
-
-    if (userSessions[chatId].services.includes('other')) {
-      note += `Custom Query: ${data.custom_query}\n`;
-    }
-
-    note += `Consent: YES`;
 
     await axios.post(
       `https://rest.gohighlevel.com/v1/contacts/${contactId}/notes`,
@@ -339,23 +295,21 @@ async function sendToGHL(chatId) {
         },
       }
     );
+
   } catch (error) {
-    console.error('❌ Error syncing with GHL:', error.response?.data || error.message);
+    console.error('❌ GHL Sync Error:', error.response?.data || error.message);
   }
 }
 
-async function logToGoogleSheet(chatId) {
+async function logToGoogleSheet(data) {
   try {
-    const data = userSessions[chatId]?.data;
-    if (!data) return;
-
     const payload = {
       name: data.name,
       email: data.email,
       phone: data.phone,
       company: data.company,
-      services: userSessions[chatId].services.join(', '),
-      socials: data.social?.map(s => `${s.platform}: ${s.link}`).join('; ') || '',
+      services: data.services.join(', '),
+      socialLinks: data.social?.map(s => `${s.platform}: ${s.link}`).join('; ') || '',
       links: data.links || '',
       ad_platforms: data.ad_platforms || '',
       ad_account: data.ad_account || '',
@@ -363,7 +317,7 @@ async function logToGoogleSheet(chatId) {
       ad_budget: data.ad_budget || '',
       ad_creatives: data.ad_creatives || '',
       ad_goal: data.ad_goal || '',
-      custom_query: data.custom_query || '',
+      customRequest: data.customRequest || '',
       consent: 'yes',
       timestamp: new Date().toISOString(),
     };
@@ -373,7 +327,7 @@ async function logToGoogleSheet(chatId) {
     });
 
   } catch (err) {
-    console.error('❌ Failed to log to Google Sheets:', err.message);
+    console.error('❌ Google Sheets Logging Error:', err.message);
   }
 }
 
@@ -382,6 +336,5 @@ bot.telegram.setMyCommands([
 ]);
 
 bot.launch();
-
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
