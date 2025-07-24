@@ -255,7 +255,7 @@ async function sendToGHL(data) {
           },
         }
       );
-      contactId = createResponse.data.id;
+      contactId = createResponse.data.contact.id;
       console.log("✅ Contact created. New contact ID:", contactId);
     }
 
