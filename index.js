@@ -3,7 +3,6 @@ const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-
 let userSessions = {};
 
 function initSession(userId) {
@@ -11,16 +10,22 @@ function initSession(userId) {
     step: 'choose_service',
     data: {
       services: [],
-      socialLinks: [],
+      social: [],
     },
   };
 }
 
 function sendMainMenu(ctx) {
   return ctx.reply(
-    `👋 Hey there! Welcome to *rep.digital*.\n\n` +
-      `We specialize in removing negative content, building strong reputations, running effective ads, and helping you win online.\n\n` +
-      `👇 Choose a service to get started or type /menu at any time to return here.`,
+    `👋 Welcome to *rep.digital*!
+
+We specialize in:
+❌ Removing negative content
+🌟 Building strong online reputations
+📢 Running ads that convert
+🎯 And more...
+
+👇 Select an option to get started or type /menu to return here anytime.`,
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
@@ -29,7 +34,7 @@ function sendMainMenu(ctx) {
           Markup.button.callback('🌟 Build Positive Reputation', 'build'),
         ],
         [
-          Markup.button.callback('📢 Ad Platform / Marketing Services', 'ads'),
+          Markup.button.callback('📢 Ad Services', 'ads'),
           Markup.button.callback('✅ Both', 'both'),
         ],
         [Markup.button.callback('🎯 Other', 'other')],
@@ -47,25 +52,25 @@ bot.command('menu', (ctx) => {
   initSession(ctx.from.id);
   sendMainMenu(ctx);
 });
+
 bot.action(['remove', 'build', 'ads', 'both', 'other'], async (ctx) => {
   const userId = ctx.from.id;
+  initSession(userId);
   const choice = ctx.match[0];
-  const session = userSessions[userId] || initSession(userId);
 
-  session.step = 'name';
-  session.data.services =
+  userSessions[userId].data.services =
     choice === 'both' ? ['remove', 'build'] : [choice];
+  userSessions[userId].step = 'name';
 
   await ctx.answerCbQuery();
   await ctx.editMessageText('Great! What’s your full name?');
 });
-
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   if (!userSessions[userId]) initSession(userId);
 
   const session = userSessions[userId];
-  const step = session.step;
+  const { step } = session;
   const text = ctx.message.text;
 
   switch (step) {
@@ -89,74 +94,45 @@ bot.on('text', async (ctx) => {
 
       if (session.data.services.includes('build')) {
         session.step = 'social_prompt';
-        return ctx.reply(
-          'Which platform do you want us to build your reputation on?',
-          Markup.keyboard([
-            ['Facebook', 'Instagram'],
-            ['LinkedIn', 'Website/Other'],
-            ['✅ No more links'],
-          ])
-            .oneTime()
-            .resize()
-        );
+        return sendSocialPlatformButtons(ctx);
       } else if (session.data.services.includes('ads')) {
         session.step = 'ad_platforms';
-        return ctx.reply(
-          'What platforms are you interested in running ads on?\nExample: Facebook, Google, TikTok, etc.'
-        );
+        return ctx.reply('What ad platforms are you interested in? (e.g. Facebook, Google)');
       } else if (session.data.services.includes('other')) {
         session.step = 'custom_request';
         return ctx.reply('Tell us briefly what you’re looking for:');
       } else {
         session.step = 'links';
-        return ctx.reply(
-          'Do you have any relevant links (ex: negative articles, review sites, etc.) we should check?'
-        );
+        return ctx.reply('Any relevant links (e.g. reviews or articles) you want us to check?');
       }
-    case 'social_prompt':
-      if (!session.data.social) session.data.social = [];
 
+    case 'social_prompt':
       if (text === '✅ No more links') {
         session.step = 'links';
         return ctx.reply('Any other relevant links we should check?');
       }
-
       session.lastSocial = text;
       session.step = 'social_link';
       return ctx.reply(`Please send the link for your ${text} profile:`);
 
     case 'social_link':
-      const platform = session.lastSocial;
-      const link = text;
-
-      session.data.social.push({ platform, link });
+      session.data.social.push({ platform: session.lastSocial, link: text });
       session.step = 'social_prompt';
-      return ctx.reply(
-        'Got it! Want to add another?',
-        Markup.keyboard([
-          ['Facebook', 'Instagram'],
-          ['LinkedIn', 'Website/Other'],
-          ['✅ No more links'],
-        ])
-          .oneTime()
-          .resize()
-      );
+      return sendSocialPlatformButtons(ctx);
 
     case 'ad_platforms':
       session.data.ad_platforms = text;
       session.step = 'ad_account';
-      return ctx.reply(
-        'Do you already have an ad account or business manager set up? (Yes / No)'
-      );
+      return ctx.reply('Do you have an ad account or business manager set up? (Yes / No)');
 
     case 'ad_account':
       session.data.ad_account = text;
       if (text.toLowerCase() === 'yes') {
         session.step = 'ad_account_id';
-        return ctx.reply('Please provide your Ad Account ID (if available):');
+        return ctx.reply('Please provide your Ad Account ID:');
       } else {
         session.step = 'ad_budget';
-        return ctx.reply('What’s your monthly ad budget? Even a ballpark is fine.');
+        return ctx.reply('What’s your monthly ad budget?');
       }
 
     case 'ad_account_id':
@@ -167,80 +143,98 @@ bot.on('text', async (ctx) => {
     case 'ad_budget':
       session.data.ad_budget = text;
       session.step = 'ad_creatives';
-      return ctx.reply(
-        'Do you have any creatives ready to go (images, videos, or ad copy)? Yes / No'
-      );
+      return ctx.reply('Do you have creatives ready? (images, videos, ad copy)');
 
     case 'ad_creatives':
       session.data.ad_creatives = text;
       session.step = 'ad_goal';
-      return ctx.reply(
-        'What’s your primary goal with ads? (e.g. lead generation, conversions, etc.)'
-      );
+      return ctx.reply('What’s your primary goal with ads? (e.g. leads, conversions)');
 
     case 'ad_goal':
       session.data.ad_goal = text;
       session.step = 'links';
-      return ctx.reply(
-        'Any landing pages, sales pages, or current ad links we should review?'
-      );
+      return ctx.reply('Any relevant links (e.g. landing pages or past ads) you’d like to share?');
 
     case 'custom_request':
       session.data.customRequest = text;
       session.step = 'links';
-      return ctx.reply(
-        'Got it. Do you have any links you’d like us to review? If not, just type "No".'
-      );
+      return ctx.reply('Got it. Any links we should check? If not, just type "No".');
 
     case 'links':
       session.data.links = text;
       session.step = 'consent';
-      return ctx.reply(
-        'Can we contact you using the info provided (email or phone)? Reply YES to continue.'
-      );
-    case 'consent':
-      if (text.trim().toLowerCase() !== 'yes') {
-        return ctx.reply('We need your consent to continue. Please reply YES to proceed.');
-      }
-
-      session.data.consent = 'yes';
-
-      // Send data to GHL
-      await sendToGHL(session.data);
-
-      // Log to Google Sheets
-      await logToGoogleSheet(session.data);
-
-      // Log to Telegram channel
-      await logToTelegramChannel(session.data);
-
-      const services = session.data.services || [];
-      const summary = `✅ Thanks, ${session.data.name}!
-
-Here’s what we received:
-- Services: ${services.join(', ')}
-- Company: ${session.data.company}
-- Email: ${session.data.email}
-- Phone: ${session.data.phone}
-${session.data.social ? `- Socials:\n${session.data.social.map(s => `  - ${s.platform}: ${s.link}`).join('\n')}` : ''}
-${session.data.ad_platforms ? `- Ad Platforms: ${session.data.ad_platforms}` : ''}
-${session.data.ad_account ? `- Ad Account Setup: ${session.data.ad_account}` : ''}
-${session.data.ad_account_id ? `- Ad Account ID: ${session.data.ad_account_id}` : ''}
-${session.data.ad_budget ? `- Ad Budget: ${session.data.ad_budget}` : ''}
-${session.data.ad_creatives ? `- Creatives Ready: ${session.data.ad_creatives}` : ''}
-${session.data.ad_goal ? `- Ad Goal: ${session.data.ad_goal}` : ''}
-${session.data.customRequest ? `- Other Request: ${session.data.customRequest}` : ''}
-- Links: ${session.data.links || 'None'}
-
-📅 Book your call here: ${GHL_CALENDAR_LINK}`;
-
-      delete userSessions[chatId];
-      return ctx.reply(summary);
+      return ctx.reply('Can we contact you using the info provided? Reply YES to continue.');
 
     default:
-      return ctx.reply('Hmm, I didn’t catch that. Please type /start to begin again.');
+      return ctx.reply('I didn’t catch that. Please type /start to begin again.');
   }
 });
+
+function sendSocialPlatformButtons(ctx) {
+  return ctx.reply(
+    'Which platform would you like us to build on?',
+    Markup.keyboard([
+      ['Facebook', 'Instagram'],
+      ['LinkedIn', 'Website/Other'],
+      ['✅ No more links'],
+    ])
+      .oneTime()
+      .resize()
+  );
+}
+bot.hears(/^yes$/i, async (ctx) => {
+  const userId = ctx.from.id;
+  const session = userSessions[userId];
+  if (!session || session.step !== 'consent') return;
+
+  const data = session.data;
+  data.consent = 'yes';
+
+  try {
+    await sendToGHL(data);
+  } catch (err) {
+    await logToTelegramChannel(data, false, 'GHL sync failed');
+  }
+
+  try {
+    await logToGoogleSheet(data);
+  } catch (err) {
+    await logToTelegramChannel(data, false, 'Google Sheet log failed');
+  }
+
+  try {
+    await logToTelegramChannel(data, true);
+  } catch (err) {
+    console.error('Logging to Telegram failed:', err.message);
+  }
+
+  const summary = buildSummary(data);
+  delete userSessions[userId];
+  return ctx.reply(summary, { parse_mode: 'Markdown' });
+});
+
+function buildSummary(data) {
+  const services = data.services.join(', ');
+  const socials = data.social.map(s => `  - ${s.platform}: ${s.link}`).join('\n');
+  return `✅ Thanks, ${data.name}!
+
+Here’s what we received:
+- Services: ${services}
+- Company: ${data.company}
+- Email: ${data.email}
+- Phone: ${data.phone}
+${data.social.length ? `- Socials:\n${socials}` : ''}
+${data.ad_platforms ? `- Ad Platforms: ${data.ad_platforms}` : ''}
+${data.ad_account ? `- Ad Account Setup: ${data.ad_account}` : ''}
+${data.ad_account_id ? `- Ad Account ID: ${data.ad_account_id}` : ''}
+${data.ad_budget ? `- Ad Budget: ${data.ad_budget}` : ''}
+${data.ad_creatives ? `- Creatives Ready: ${data.ad_creatives}` : ''}
+${data.ad_goal ? `- Ad Goal: ${data.ad_goal}` : ''}
+${data.customRequest ? `- Other Request: ${data.customRequest}` : ''}
+- Links: ${data.links || 'None'}
+
+📅 Book your call here: ${process.env.GHL_CALENDAR_LINK}`;
+}
 async function sendToGHL(data) {
   try {
     const { name, email, phone, company, services = [] } = data;
@@ -264,7 +258,7 @@ async function sendToGHL(data) {
       firstName: name.split(' ')[0],
       lastName: name.split(' ')[1] || '',
       companyName: company || '',
-      source: 'Telegram Bot'
+      source: 'Telegram Bot',
     };
 
     if (existingContact) {
@@ -293,7 +287,7 @@ async function sendToGHL(data) {
       contactId = createResponse.data.id;
     }
 
-    // Add tag
+    // Add source tag
     await axios.post(
       `https://rest.gohighlevel.com/v1/contacts/${contactId}/tags`,
       { tags: ['telegram lead'] },
@@ -305,28 +299,34 @@ async function sendToGHL(data) {
       }
     );
 
-    // Build note body
-    let noteBody = `Source: Telegram Bot\nServices: ${services.join(', ')}\nName: ${name}\nCompany: ${company}\nEmail: ${email}\nPhone: ${phone}\n`;
+    // Add a contact note
+    const noteLines = [
+      `Source: Telegram Bot`,
+      `Name: ${name}`,
+      `Company: ${company}`,
+      `Email: ${email}`,
+      `Phone: ${phone}`,
+      `Services: ${services.join(', ')}`,
+    ];
 
-    if (services.includes('ads')) {
-      noteBody += `Ad Platforms: ${data.ad_platforms}\nAd Account: ${data.ad_account}\n`;
-      if (data.ad_account_id) noteBody += `Ad Account ID: ${data.ad_account_id}\n`;
-      noteBody += `Ad Budget: ${data.ad_budget}\nCreatives: ${data.ad_creatives}\nGoal: ${data.ad_goal}\n`;
+    if (data.social?.length) {
+      noteLines.push('Socials:');
+      noteLines.push(...data.social.map(s => `- ${s.platform}: ${s.link}`));
     }
 
-    if (data.social) {
-      noteBody += `Socials:\n${data.social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('\n')}\n`;
-    }
-
-    if (data.customRequest) {
-      noteBody += `Custom Request: ${data.customRequest}\n`;
-    }
-
-    noteBody += `Links: ${data.links || 'None'}\nConsent: Yes`;
+    if (data.ad_platforms) noteLines.push(`Ad Platforms: ${data.ad_platforms}`);
+    if (data.ad_account) noteLines.push(`Ad Account: ${data.ad_account}`);
+    if (data.ad_account_id) noteLines.push(`Ad Account ID: ${data.ad_account_id}`);
+    if (data.ad_budget) noteLines.push(`Ad Budget: ${data.ad_budget}`);
+    if (data.ad_creatives) noteLines.push(`Ad Creatives: ${data.ad_creatives}`);
+    if (data.ad_goal) noteLines.push(`Ad Goal: ${data.ad_goal}`);
+    if (data.customRequest) noteLines.push(`Custom Request: ${data.customRequest}`);
+    if (data.links) noteLines.push(`Links: ${data.links}`);
+    noteLines.push(`Consent: Yes`);
 
     await axios.post(
       `https://rest.gohighlevel.com/v1/contacts/${contactId}/notes`,
-      { body: noteBody },
+      { body: noteLines.join('\n') },
       {
         headers: {
           Authorization: `Bearer ${process.env.GHL_API_KEY}`,
@@ -334,8 +334,9 @@ async function sendToGHL(data) {
         },
       }
     );
-  } catch (error) {
-    console.error('❌ Error syncing with GHL:', error.response?.data || error.message);
+  } catch (err) {
+    console.error('❌ GHL Error:', err.response?.data || err.message);
+    throw err;
   }
 }
 
@@ -361,23 +362,27 @@ async function logToGoogleSheet(data) {
     };
 
     await axios.post(process.env.SHEETS_WEBHOOK_URL, payload, {
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
     });
   } catch (err) {
-    console.error('❌ Failed to log to Google Sheets:', err.message);
+    console.error('❌ Google Sheets Error:', err.message);
+    throw err;
   }
 }
 
-async function logToTelegramChannel(data) {
+async function logToTelegramChannel(data, success = true, failureReason = '') {
   try {
-    const msg = `📥 New Submission Received:
+    const status = success ? '✅ Successful Submission' : `❌ Failed Submission (${failureReason})`;
+    const socials = data.social?.map(s => `- ${s.platform}: ${s.link}`).join('\n') || 'None';
+
+    const msg = `${status}:
+
 Name: ${data.name}
 Company: ${data.company}
 Email: ${data.email}
 Phone: ${data.phone}
-Services: ${data.services?.join(', ') || ''}
-
-${data.social ? `Socials:\n${data.social.map(s => `- ${s.platform}: ${s.link}${s.valid ? '' : ' ❌'}`).join('\n')}` : ''}
+Services: ${data.services?.join(', ') || 'None'}
+Socials:\n${socials}
 ${data.ad_platforms ? `Ad Platforms: ${data.ad_platforms}` : ''}
 ${data.ad_account ? `Ad Account: ${data.ad_account}` : ''}
 ${data.ad_account_id ? `Ad Account ID: ${data.ad_account_id}` : ''}
@@ -386,20 +391,31 @@ ${data.ad_creatives ? `Creatives: ${data.ad_creatives}` : ''}
 ${data.ad_goal ? `Goal: ${data.ad_goal}` : ''}
 ${data.customRequest ? `Other Notes: ${data.customRequest}` : ''}
 Links: ${data.links || 'None'}
-✅ Consent: Yes`;
+Consent: Yes
+Timestamp: ${new Date().toLocaleString()}`;
 
     await bot.telegram.sendMessage(process.env.TELEGRAM_CHANNEL_ID, msg);
   } catch (err) {
-    console.error('❌ Failed to log to Telegram Channel:', err.message);
+    console.error('❌ Telegram Logging Error:', err.message);
   }
 }
-
-// Set custom commands
+// Set /menu command for easy access
 bot.telegram.setMyCommands([
-  { command: 'menu', description: 'Open Main Services Menu' }
+  { command: 'menu', description: 'Return to the main service selection menu' },
 ]);
 
-// Launch bot
-bot.launch();
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// Launch the bot
+bot.launch().then(() => {
+  console.log('🚀 Telegram bot is up and running!');
+});
+
+// Graceful shutdown handlers
+process.once('SIGINT', () => {
+  console.log('🔻 SIGINT received. Stopping bot...');
+  bot.stop('SIGINT');
+});
+
+process.once('SIGTERM', () => {
+  console.log('🔻 SIGTERM received. Stopping bot...');
+  bot.stop('SIGTERM');
+});
